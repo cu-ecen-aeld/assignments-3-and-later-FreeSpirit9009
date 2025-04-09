@@ -102,9 +102,15 @@ echo "Library dependencies"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
 
-# 
+# Prepare to copy, find the location of the cross compiler
+pathOfExecutable=$(type -P "${CROSS_COMPILE}readelf")
+dirOfExecutable=$(dirname $pathOfExecutable)
+CROSS_ROOT=$dirOfExecutable/../
+echo "CROSS_ROOT was found to be " ${CROSS_ROOT}
+
+# Copy libs
 echo "Adding library dependencies ..."
-CROSS_ROOT=/home/georg/Programs/arm-gnu-toolchain-13.3.rel1-x86_64-aarch64-none-linux-gnu
+#CROSS_ROOT=/home/georg/Programs/arm-gnu-toolchain-13.3.rel1-x86_64-aarch64-none-linux-gnu
 #cp ${CROSS_ROOT}/aarch64-none-linux-gnu/libc/usr/lib64/libm.so ./lib64
 #cp ${CROSS_ROOT}/aarch64-none-linux-gnu/libc/usr/lib64/libc.so ./lib64
 cp ${CROSS_ROOT}/aarch64-none-linux-gnu/libc/lib64/libm.so.6 ./lib64
