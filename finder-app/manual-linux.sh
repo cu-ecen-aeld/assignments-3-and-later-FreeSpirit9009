@@ -26,7 +26,9 @@ fi
 mkdir -p ${OUTDIR}
 
 # clone sources to OUTDIR
-cd "$OUTDIR"
+echo "Check my current directory:"
+pwd
+pushd "$OUTDIR"
 if [ ! -d "${OUTDIR}/linux-stable" ]; then
     #Clone only if the repository does not exist.
 	echo "CLONING GIT LINUX STABLE VERSION ${KERNEL_VERSION} IN ${OUTDIR}"
@@ -131,8 +133,14 @@ sudo mknod -m 666 dev/console c 5 1
 
 # Clean and build the writer utility
 echo "Cross compiling and installing writer ..."
-WORKING_DIR=/home/georg/Dev/training/assignment-1-FreeSpirit9009/finder-app
-cd ${WORKING_DIR}
+
+# popd will return me to where the script was started...???
+#WORKING_DIR=/home/georg/Dev/training/assignment-1-FreeSpirit9009/finder-app
+#cd ${WORKING_DIR}
+popd
+echo "Check my current directory (2):"
+pwd
+pushd ./finder-app
 make clean
 make CROSS_COMPILE=aarch64-none-linux-gnu-
 file writer
@@ -156,4 +164,6 @@ cd "$OUTDIR/rootfs"
 find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
 cd "$OUTDIR"
 gzip -f initramfs.cpio
+
+# return to original directory? (TODO)
 
