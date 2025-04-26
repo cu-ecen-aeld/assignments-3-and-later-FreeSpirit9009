@@ -140,7 +140,7 @@ echo "Cross compiling and installing writer ..."
 popd
 echo "Check my current directory (2):"
 pwd
-pushd ./finder-app
+#pushd ./finder-app
 make clean
 make CROSS_COMPILE=aarch64-none-linux-gnu-
 file writer
