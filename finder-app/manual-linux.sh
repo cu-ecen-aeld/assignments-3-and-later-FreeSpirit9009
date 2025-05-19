@@ -143,7 +143,9 @@ pwd
 #pushd ./finder-app
 make clean
 make CROSS_COMPILE=aarch64-none-linux-gnu-
-file writer
+
+# it seems the gitlab runner doesn't recognize the file command
+#file writer
 
 # Copy the finder related scripts and executables to the /home directory (TODO: what "related scripts"?)
 # on the target rootfs - Copy your finder.sh, conf/username.txt, conf/assignment.txt and finder-test.sh
