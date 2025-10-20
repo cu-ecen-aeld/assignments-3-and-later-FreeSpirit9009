@@ -16,9 +16,6 @@ CROSS_COMPILE =
 endif
 CC = $(CROSS_COMPILE)gcc
 
-# default target
-all: $(EXECUTABLE)
-
 # sources
 NAME = writer
 SOURCE = $(NAME).c
@@ -26,6 +23,7 @@ SOURCE = $(NAME).c
 # default target
 EXECUTABLE = $(NAME)
 default: $(EXECUTABLE)
+all: $(EXECUTABLE)
 
 $(EXECUTABLE): $(SOURCE)
 	$(CC) $(SOURCE) -o $(EXECUTABLE)
@@ -37,4 +35,3 @@ clean:
 .PHONY:
 debug:
 	echo $(CROSS_COMPILE)
-
