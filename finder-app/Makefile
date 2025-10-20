@@ -16,6 +16,9 @@ CROSS_COMPILE =
 endif
 CC = $(CROSS_COMPILE)gcc
 
+# default target
+all: $(EXECUTABLE)
+
 # sources
 NAME = writer
 SOURCE = $(NAME).c
