@@ -1,3 +1,4 @@
+server/archives/
 *.o
 writer
 Test_*_Runner.c

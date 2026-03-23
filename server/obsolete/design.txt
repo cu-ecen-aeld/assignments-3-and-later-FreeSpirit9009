@@ -1,0 +1,30 @@
+int main() {
+
+  // prepare
+  
+  //
+  while (!orderedToStop) {
+    // setup
+    // bind
+    // accept
+    if (signhalder) {
+      
+    }
+    
+    while(true) {
+    // revc
+    if not ordered recv)=
+    
+    recv
+    
+    write to file
+    
+  }
+  
+  // shutdown
+
+
+
+
+
+}

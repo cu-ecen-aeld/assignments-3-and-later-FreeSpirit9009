@@ -1,0 +1,167 @@
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <unistd.h>
+
+ssize_t recv_line_alloc(int fd, char **out_line) {
+    const size_t CHUNK = 4096;          // grow by chunks; no fixed upper bound
+    char *buf = NULL;
+    size_t cap = 0;
+    size_t len = 0;
+
+    for (;;) {
+        // Ensure capacity to read at least one more chunk
+        if (len + 1 >= cap) {
+            size_t new_cap = cap ? cap + CHUNK : CHUNK;
+            char *tmp = realloc(buf, new_cap);
+            if (!tmp) {
+                free(buf);
+                return -1; // ENOMEM
+            }
+            buf = tmp;
+            cap = new_cap;
+        }
+
+        // Read into the free space
+        ssize_t n = recv(fd, buf + len, cap - len - 1, 0);
+        if (n > 0) {
+            len += (size_t)n;
+            buf[len] = '\0';
+
+            // Look for newline
+            char *nl = memchr(buf, '\n', len);
+            if (nl) {
+                // Optionally trim to just one line (keep the newline)
+                size_t line_len = (size_t)(nl - buf + 1);
+                buf[line_len] = '\0';
+                // If you want to keep any extra bytes for next call,
+                // you'd need a persistent buffer outside this function.
+                *out_line = buf;
+                return (ssize_t)line_len;
+            }
+
+            // No newline yet; loop to read more (buffer will grow as needed)
+            continue;
+        }
+
+        if (n == 0) {
+            // Peer closed. If we collected anything, return it (last line may have no '\n').
+            if (len > 0) {
+                buf[len] = '\0';
+                *out_line = buf;
+                return (ssize_t)len;
+            }
+            // Nothing read at all -> EOF
+            free(buf);
+            return 0;
+        }
+
+        // n < 0 -> error
+        if (errno == EINTR) {
+            continue; // retry
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // Non-blocking socket with no data available *yet*.
+            // Decide policy: return partial? block? For blocking semantics, you’d select()/poll() first.
+            // Here we return what we have if any; else signal "try again later".
+            if (len > 0) {
+                buf[len] = '\0';
+                *out_line = buf;
+                return (ssize_t)len;
+            } else {
+                free(buf);
+                return -2; // caller can treat this as "would block"
+            }
+        }
+
+        // Real error
+        int saved = errno;
+        free(buf);
+        errno = saved;
+        return -1;
+    }
+}
+
+
+
+
+char *line = NULL;
+ssize_t n = recv_line_alloc(new_fd, &line);
+if (n > 0) {
+    // Got a line (possibly ending with '\n')
+    printf("bytes_received=%zd: %s", n, line); // line already printable
+    // If you want to ensure it ends with '\n' when printing, handle the no-newline case
+} else if (n == 0) {
+    printf("Peer closed connection (EOF)\n");
+} else if (n == -2) {
+    printf("Would block (non-blocking socket, no data yet)\n");
+} else {
+    printf("recv_line_alloc error: %s\n", strerror(errno));
+}
+free(line);
+
+
+
+
+
+
+ssize_t recv_line_alloc2(int fd, char **out_line) {
+    const size_t CHUNK = 4096;
+    char *buf = NULL;
+    size_t cap = 0, len = 0;
+
+    for (;;) {
+        if (len + 1 + CHUNK > cap) {
+            size_t new_cap = cap ? cap * 2 : CHUNK;
+            if (new_cap < len + 1 + CHUNK) new_cap = len + 1 + CHUNK;
+            char *tmp = realloc(buf, new_cap);
+            if (!tmp) { free(buf); return -1; }
+            buf = tmp; cap = new_cap;
+        }
+
+        ssize_t n = recv(fd, buf + len, CHUNK, 0);
+        if (n > 0) {
+            len += (size_t)n;
+            buf[len] = '\0';
+            char *nl = memchr(buf, '\n', len);
+            if (nl) {
+                size_t line_len = (size_t)(nl - buf + 1);
+                buf[line_len] = '\0';
+                *out_line = buf;
+                return (ssize_t)line_len;
+            }
+            continue;
+        }
+        if (n == 0) {
+            if (len > 0) { buf[len] = '\0'; *out_line = buf; return (ssize_t)len; }
+            free(buf); return 0;
+        }
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (len > 0) { buf[len] = '\0'; *out_line = buf; return (ssize_t)len; }
+            free(buf); return -2;
+        }
+        int saved = errno;
+        free(buf); errno = saved; return -1;
+    }
+}
+
+
+
+Why you can’t just call recv() once
+
+TCP is a byte stream; a single recv() may return:
+
+less than one line,
+exactly one line,
+more than one line,
+or zero bytes (EOF),
+or be interrupted (EINTR),
+or would-block on non-blocking sockets.
+
+
+Therefore you must accumulate and scan for delimiters (e.g. \n).
+
