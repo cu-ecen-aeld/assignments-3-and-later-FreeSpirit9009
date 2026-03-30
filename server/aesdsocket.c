@@ -1,18 +1,18 @@
 /**
- * requirements:
- * Opens a stream socket bound to port 9000, failing and returning -1 if any of the socket connection steps fail.
- * Listens for and accepts a connection
- * Logs message to the syslog “Accepted connection from xxx” where XXXX is the IP address of the connected client. 
- * Receives data over the connection and appends to file /var/tmp/aesdsocketdata, creating this file if it doesn’t exist.
- * Your implementation should use a newline to separate data packets received.  In other words a packet is considered complete when a newline character is found in the input receive stream, and each newline should result in an append to the /var/tmp/aesdsocketdata file.
- * You may assume the data stream does not include null characters (therefore can be processed using string handling functions).
- * You may assume the length of the packet will be shorter than the available heap size.  In other words, as long as you handle malloc() associated failures with error messages you may discard associated over-length packets.
- * f. Returns the full content of /var/tmp/aesdsocketdata to the client as soon as the received data packet completes.
- * You may assume the total size of all packets sent (and therefore size of /var/tmp/aesdsocketdata) will be less than the size of the root filesystem, however you may not assume this total size of all packets sent will be less than the size of the available RAM for the process heap.
- * g. Logs message to the syslog “Closed connection from XXX” where XXX is the IP address of the connected client.
- * h. Restarts accepting connections from new clients forever in a loop until SIGINT or SIGTERM is received (see below).
- * i. Gracefully exits when SIGINT or SIGTERM is received, completing any open connection operations, closing any open sockets, and deleting the file /var/tmp/aesdsocketdata.
- * Logs message to the syslog “Caught signal, exiting” when SIGINT or SIGTERM is received.
+ * requirements from course assignment:
+ * - Opens a stream socket bound to port 9000, failing and returning -1 if any of the socket connection steps fail.
+ * - Listens for and accepts a connection
+ * - Logs message to the syslog “Accepted connection from xxx” where XXXX is the IP address of the connected client. 
+ * - Receives data over the connection and appends to file /var/tmp/aesdsocketdata, creating this file if it doesn’t exist.
+ * - Your implementation should use a newline to separate data packets received.  In other words a packet is considered complete when a newline character is found in the input receive stream, and each newline should result in an append to the /var/tmp/aesdsocketdata file.
+ * - You may assume the data stream does not include null characters (therefore can be processed using string handling functions).
+ * - You may assume the length of the packet will be shorter than the available heap size.  In other words, as long as you handle malloc() associated failures with error messages you may discard associated over-length packets.
+ * - f. Returns the full content of /var/tmp/aesdsocketdata to the client as soon as the received data packet completes.
+ * - You may assume the total size of all packets sent (and therefore size of /var/tmp/aesdsocketdata) will be less than the size of the root filesystem, however you may not assume this total size of all packets sent will be less than the size of the available RAM for the process heap.
+ * - g. Logs message to the syslog “Closed connection from XXX” where XXX is the IP address of the connected client.
+ * - h. Restarts accepting connections from new clients forever in a loop until SIGINT or SIGTERM is received (see below).
+ * - i. Gracefully exits when SIGINT or SIGTERM is received, completing any open connection operations, closing any open sockets, and deleting the file /var/tmp/aesdsocketdata.
+ * - Logs message to the syslog “Caught signal, exiting” when SIGINT or SIGTERM is received.
  * 
  * references:
  * - https://beej.us/guide/bgnet/html/split-wide/client-server-background.html - includes fork
@@ -20,8 +20,9 @@
  * test commands:
  * - nc 127.0.0.1 9000
  * - cat /var/tmp/aesdsocketdata
- * - test ctrl c before connecting and after connection, and while connected
+ * - test ctrl c in the session running the program, (a) before connecting and (b) after connection, and (c) while connected
  * - tail -f /var/log/syslog
+ * - ../assignment-autotest/test/assignment5/sockettest.sh 
  * 
  * test cases:
  * - termination
@@ -31,6 +32,14 @@
  * - connection, disconnection and reconnection of client (note, it truncates the file, which might not be desireable)
  * - send some data and check reply and also the file contents
  * - check syslog for all of the above
+ * - check the file after program closes gracefully, it should be gone
+ * 
+ * known issues or limitations:
+ * - pressing ctrl c right after starting the program will result in an error message: Error deleting file: No such file or directory
+ * - when client disconnects and reconnects, temporary file is deleted, not sure whether that's as intended
+ * - option "-d" not yet implemented; full-test uses this
+ * - socket-test.sh currently fails, likely because file is deleted when client disconnects
+ * - socket-test.sh currently fails, likely because file is deleted when client disconnects
  *
  * references:
  * - https://stackoverflow.com/questions/16990746/isnt-recv-in-c-socket-programming-blocking
@@ -190,6 +199,11 @@ int main() {
 		}
 	}
 	
+	// truncate the file, note: when server disconnects and reconnects, file will be truncated. If this isn't
+	// what they want, move this outside the outer loop
+	FILE *file = fopen("/var/tmp/aesdsocketdata", "w");
+	fclose(file);
+	
 	// outer loop
 	while(!isApplicationOrderedToStop) {
 
@@ -212,6 +226,9 @@ int main() {
 		char s[INET6_ADDRSTRLEN];
 		inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), s, sizeof s);
 		printf("server: got connection from %s\n", s);
+		
+		// welcome message is not welcome to sockettest.sh
+#if 0
 		char *msg = "Welcome to aesdsocket!";
 		int len, bytes_sent;
 		len = strlen(msg);
@@ -221,6 +238,7 @@ int main() {
 			exit(1);		
 		}
 		printf("bytes_sent=%u\n",bytes_sent);
+#endif
 		
 		// d. Logs message to the syslog “Accepted connection from xxx” where XXX is the IP address of the connected client. 
 		{
@@ -229,20 +247,23 @@ int main() {
 			(void)snprintf(message, sizeof(message), "Accepted connection from %s", s);
 			writeToSyslog(message);
 		}
-		
+
+#if 0
 		// truncate the file, note: when server disconnects and reconnects, file will be truncated. If this isn't
 		// what they want, move this outside the outer loop
 		FILE *file = fopen("/var/tmp/aesdsocketdata", "w");
 		fclose(file);
+#endif
 
 		// inner loop
 		while(!isApplicationOrderedToStop) {
 
 			// use buffered access (getline) to prevent having to tinker with individual bytes and chunks of messages
 			FILE *fp = fdopen(new_fd, "r");
-				if (!fp) {
+			if (!fp) {
 				perror("fdopen");
-				// TODO: handle error
+				printf("line %u: fdopen error\n", __LINE__);
+				break;
 			}
 
 			char *line = NULL;
@@ -295,7 +316,6 @@ int main() {
 				//   ETIMEDOUT   (timeout if configured)
 				//   EIO         (generic I/O error)
 				//   ENOMEM      (out of memory; very rare but defined)
-
 				if (errno == ECONNRESET) {
 					// CONNECTION RESET BY PEER
 					// --> Log reset event
@@ -325,6 +345,7 @@ int main() {
             // at this point we have a valid line with a valid length; in error cases we either got out of the loop,
             // terminated the program, or restarted the loop, so we would not get here
             assert(len > 0);
+            assert(line != 0);
 			printf("line %u: line is <%s>\n", __LINE__, line);			
 
 			// open file, create if not present
