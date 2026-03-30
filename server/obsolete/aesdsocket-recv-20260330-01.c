@@ -31,10 +31,7 @@
  * - connection, disconnection and reconnection of client (note, it truncates the file, which might not be desireable)
  * - send some data and check reply and also the file contents
  * - check syslog for all of the above
- *
- * references:
- * - https://stackoverflow.com/questions/16990746/isnt-recv-in-c-socket-programming-blocking
- */
+*/
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -52,7 +49,6 @@
 #include <stdbool.h>
 #include <sys/socket.h>
 #include <syslog.h>
-#include <assert.h>
 
 
 //--------------------------------------------------------------------------------------------------
@@ -76,9 +72,7 @@ void signalHandler(int signum) {
 //--------------------------------------------------------------------------------------------------
 // helper functions
 //--------------------------------------------------------------------------------------------------
-/**
- * @brief get sockaddr, IPv4 or IPv6
- */
+// get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
 {
     if (sa->sa_family == AF_INET) {
@@ -88,15 +82,147 @@ void *get_in_addr(struct sockaddr *sa)
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-/**
- * @brief write a message to syslog
- */
 void writeToSyslog(char* message) {
 	openlog("aesdsocket", LOG_PID, LOG_USER);
 	syslog(LOG_INFO, "%s", message);  // Use format specifier
 	closelog();   
 }
 
+/**
+ * This function blocks on a blocking socket until it has read one full line (ending in \n) or EOF. It returns a
+ * malloc’d, null‑terminated string that you must free().
+ */
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <unistd.h>
+ssize_t recv_line_alloc(int fd, char **out_line) {
+    const size_t CHUNK = 4096;          // grow by chunks; no fixed upper bound
+    char *buf = NULL;
+    size_t cap = 0;
+    size_t len = 0;
+
+    for (;;) {
+        // Ensure capacity to read at least one more chunk
+        if (len + 1 >= cap) {
+            size_t new_cap = cap ? cap + CHUNK : CHUNK;
+            char *tmp = realloc(buf, new_cap);
+            if (!tmp) {
+                free(buf);
+                return -1; // ENOMEM
+            }
+            buf = tmp;
+            cap = new_cap;
+        }
+
+        // Read into the free space
+        ssize_t n = recv(fd, buf + len, cap - len - 1, 0);
+        if (n > 0) {
+            len += (size_t)n;
+            buf[len] = '\0';
+
+            // Look for newline
+            char *nl = memchr(buf, '\n', len);
+            if (nl) {
+                // Optionally trim to just one line (keep the newline)
+                size_t line_len = (size_t)(nl - buf + 1);
+                buf[line_len] = '\0';
+                // If you want to keep any extra bytes for next call,
+                // you'd need a persistent buffer outside this function.
+                *out_line = buf;
+                return (ssize_t)line_len;
+            }
+
+            // No newline yet; loop to read more (buffer will grow as needed)
+            continue;
+        }
+
+        if (n == 0) {
+            // Peer closed. If we collected anything, return it (last line may have no '\n').
+            if (len > 0) {
+                buf[len] = '\0';
+                *out_line = buf;
+                return (ssize_t)len;
+            }
+            // Nothing read at all -> EOF
+            free(buf);
+            return 0;
+        }
+
+        // n < 0 -> error
+        if (errno == EINTR) {
+            continue; // retry
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // Non-blocking socket with no data available *yet*.
+            // Decide policy: return partial? block? For blocking semantics, you’d select()/poll() first.
+            // Here we return what we have if any; else signal "try again later".
+            if (len > 0) {
+                buf[len] = '\0';
+                *out_line = buf;
+                return (ssize_t)len;
+            } else {
+                free(buf);
+                return -2; // caller can treat this as "would block"
+            }
+        }
+
+        // Real error
+        int saved = errno;
+        free(buf);
+        errno = saved;
+        return -1;
+    }
+}
+
+/**
+ * A slightly different approach: read fixed-size chunks (e.g., 4 KiB) and append to a dynamic buffer; scan for \n
+ * each time. This is essentially what Option A does, but you can make the chunk size explicit and avoid calling recv()
+ * with tiny sizes.
+ */
+ssize_t recv_line_alloc2(int fd, char **out_line) {
+    const size_t CHUNK = 4096;
+    char *buf = NULL;
+    size_t cap = 0, len = 0;
+
+    for (;;) {
+        if (len + 1 + CHUNK > cap) {
+            size_t new_cap = cap ? cap * 2 : CHUNK;
+            if (new_cap < len + 1 + CHUNK) new_cap = len + 1 + CHUNK;
+            char *tmp = realloc(buf, new_cap);
+            if (!tmp) { free(buf); return -1; }
+            buf = tmp; cap = new_cap;
+        }
+
+        ssize_t n = recv(fd, buf + len, CHUNK, 0);
+        if (n > 0) {
+            len += (size_t)n;
+            buf[len] = '\0';
+            char *nl = memchr(buf, '\n', len);
+            if (nl) {
+                size_t line_len = (size_t)(nl - buf + 1);
+                buf[line_len] = '\0';
+                *out_line = buf;
+                return (ssize_t)line_len;
+            }
+            continue;
+        }
+        if (n == 0) {
+            if (len > 0) { buf[len] = '\0'; *out_line = buf; return (ssize_t)len; }
+            free(buf); return 0;
+        }
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (len > 0) { buf[len] = '\0'; *out_line = buf; return (ssize_t)len; }
+            free(buf); return -2;
+        }
+        int saved = errno;
+        free(buf); errno = saved; return -1;
+    }
+}
 
 //--------------------------------------------------------------------------------------------------
 // main
@@ -190,7 +316,6 @@ int main() {
 		}
 	}
 	
-	// outer loop
 	while(!isApplicationOrderedToStop) {
 
 		// accept incoming connection
@@ -233,100 +358,35 @@ int main() {
 		// truncate the file, note: when server disconnects and reconnects, file will be truncated. If this isn't
 		// what they want, move this outside the outer loop
 		FILE *file = fopen("/var/tmp/aesdsocketdata", "w");
-		fclose(file);
+        fclose(file);
 
-		// inner loop
 		while(!isApplicationOrderedToStop) {
 
-			// use buffered access (getline) to prevent having to tinker with individual bytes and chunks of messages
-			FILE *fp = fdopen(new_fd, "r");
-				if (!fp) {
-				perror("fdopen");
-				// TODO: handle error
-			}
-
-			char *line = NULL;
-			size_t cap = 0;
-
-			// getline() allocates or grows the buffer as needed
-			ssize_t len = getline(&line, &cap, fp);
-
-			// handle all possible errors and situations
-			if (len >= 0) {
-				// SUCCESS: full line read, we will process the line after this if block
-				printf("line %u: read %lu bytes\n", __LINE__, len);
-			} else {
-
-				// len == -1: error or EOF.
-				if (feof(fp)) {
-					// CLEAN EOF: peer closed connection, this occurs when I close netcat with Ctrl-C.
-					// --> Trigger graceful shutdown of this connection
-					// --> Cleanup resources and return
-					printf("line %u: clean EOF\n", __LINE__);
-					free(line);
-					
-					// g. Logs message to the syslog “Closed connection from XXX” where XXX is the IP address of the connected client.
-					char message[1000];
-					(void)memset(message, 0, sizeof(message));   
-					(void)snprintf(message, sizeof(message), "Closed connection from %s", s);
-					writeToSyslog(message);
-					
-					// get out of the loop, this will delete the temporary file but otherwise works fine
+			// recv
+			char rx[1000];
+			(void)memset(&rx, 0, 1000);
+			int flags = 0;
+			int bytes_received = recv(new_fd, rx, 1000, flags);
+			printf("bytes_received=%i: %s\n",bytes_received, rx);
+			if(bytes_received < 0) {
+				if (errno == EINTR && isApplicationOrderedToStop) {
+					printf("exit by signal handler with 0 (recv)\n");
 					break;
-				}
-
-				if (errno == EINTR) {
-					// INTERRUPTED BY SIGNAL
-					// --> Check if this was a shutdown-triggering signal
-					// --> If yes: perform graceful shutdown
-					// --> Otherwise: retry reading					
-					if (isApplicationOrderedToStop) {
-						printf("exit by signal handler with 0 (getline)\n");
-						break;
-					}					
-					
-					printf("line %u: errno=%u\n", __LINE__, errno);
-					continue;   // retry getline()
-				}
-
-				// If we reach here, it's a *real error* (connection reset, I/O error, etc.)
-				// Typical errno values:
-				//   ECONNRESET  (peer reset connection)
-				//   ETIMEDOUT   (timeout if configured)
-				//   EIO         (generic I/O error)
-				//   ENOMEM      (out of memory; very rare but defined)
-
-				if (errno == ECONNRESET) {
-					// CONNECTION RESET BY PEER
-					// --> Log reset event
-					// --> Trigger graceful cleanup of this connection
-					printf("line %u: reset by peer\n", __LINE__);
-					free(line);
-					continue;
-				}
-
-				if (errno == ENOMEM) {
-					// OUT OF MEMORY
-					// --> Handle memory exhaustion path
-					// --> You must abort or reclaim memory; safe exit is preferred
-					printf("line %u: errno=%u, out of memory, will close program immediately, no graceful shutdown\n", __LINE__, errno);
-					free(line);
+				} else {
+					fprintf(stderr, "recv error: %s\n", strerror(errno));
 					exit(1);
 				}
+			} else if (bytes_received == 0) {
+				printf("0 bytes received, error=%s\n", strerror(errno));
 
-				// ANY OTHER ERROR (EIO, ETIMEDOUT, unknown)
-				// --> Perform error logging
-				// --> Trigger graceful shutdown
-				printf("line %u: errno=%u, len=%ld, unknown error\n", __LINE__, errno, len);
-				free(line);
+				// g. Logs message to the syslog “Closed connection from XXX” where XXX is the IP address of the connected client.
+				char message[1000];
+				(void)memset(message, 0, sizeof(message));   
+				(void)snprintf(message, sizeof(message), "Closed connection from %s", s);
+				writeToSyslog(message);
 				break;
 			}
-
-            // at this point we have a valid line with a valid length; in error cases we either got out of the loop,
-            // terminated the program, or restarted the loop, so we would not get here
-            assert(len > 0);
-			printf("line %u: line is <%s>\n", __LINE__, line);			
-
+				
 			// open file, create if not present
 			FILE *file = fopen("/var/tmp/aesdsocketdata", "a"); // Use "wb" for binary, "w" for text
 			if (file == NULL) {
@@ -335,16 +395,15 @@ int main() {
 			}
 
 			// write data to file
-			size_t result = fwrite(line, 1, len, file);
-			if (result != (size_t)len) {
+			size_t result = fwrite(rx, 1, bytes_received, file);
+			if (result != (size_t)bytes_received) {
 				printf("Error: Failed to write all data.\n");
 			} else {
 				printf("Data written successfully.\n");
 			}
 			
-			// close the file and free memory allocated by getline
+			// close the file
 			fclose(file);
-			free(line);
 			
 			// send reply to client, reopen the file but this time for reading
 			file = fopen("/var/tmp/aesdsocketdata", "r");
@@ -356,39 +415,36 @@ int main() {
             // read from file line by line
             // f. ... you may not assume this total size of all packets sent will be less than the size of the
             // available RAM for the process heap
-            // use {} because variables are named same as above
-            {
-				char* line = NULL;      // getline() will allocate, we must free
-				size_t cap = 0;         // capacity managed by getline
-				ssize_t len;
-				while ((len = getline(&line, &cap, file)) != -1) {
-					
-					//printf("Info: line=<%s>, len=%zd\n", line, len);
+			char *line = NULL;      // getline() will allocate, we must free
+			size_t cap = 0;         // capacity managed by getline
+			ssize_t len;
+			while ((len = getline(&line, &cap, file)) != -1) {
+				
+				//printf("Info: line=<%s>, len=%zd\n", line, len);
 
-					// send requires a while loop
-					//
-					// This is required by POSIX and documented explicitly in Linux man 2 send:
-					//
-					// "The call may return the number of bytes actually sent, which can be less than the number requested to be sent..."
-					// (Linux manual page — man 2 send)
-					//
-					size_t total_sent = 0;
-					while (total_sent < (size_t)len) {
-						ssize_t sent = send(new_fd, line + total_sent, len - total_sent, 0);
+                // send requires a while loop
+                //
+                // This is required by POSIX and documented explicitly in Linux man 2 send:
+				//
+				// "The call may return the number of bytes actually sent, which can be less than the number requested to be sent..."
+				// (Linux manual page — man 2 send)
+				//
+				size_t total_sent = 0;
+				while (total_sent < (size_t)len) {
+					ssize_t sent = send(new_fd, line + total_sent, len - total_sent, 0);
 
-						if (sent <= 0) {
-							printf("Error: send failed, error=%s\n", strerror(errno));
-							free(line);
-							fclose(file);
-							return -1;
-						}
-						total_sent += sent;
+					if (sent <= 0) {
+						printf("Error: send failed, error=%s\n", strerror(errno));
+						free(line);
+						fclose(file);
+						return -1;
 					}
+					total_sent += sent;
 				}
-
-				free(line);
-				fclose(file);
 			}
+
+			free(line);
+			fclose(file);
 		}
 		
 		// we will also leave outer loop only if isApplicationOrderedToStop due to the while() condition
@@ -411,5 +467,4 @@ int main() {
 
   return 0;
 }
-
 
