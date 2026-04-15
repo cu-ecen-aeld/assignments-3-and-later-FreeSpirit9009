@@ -72,8 +72,8 @@ static sig_atomic_t isApplicationOrderedToStop = false;
 /**
  * Signal handler for graceful shutdown
  */
-void writeToSyslog(char* message);
-void signalHandler(int signum) {
+static void writeToSyslog(char* message);
+static void signalHandler(int signum) {
   fprintf(stderr, "\nSignal %d received, initiating graceful shutdown...\n", signum);
   writeToSyslog("Caught signal, exiting");
   
@@ -88,7 +88,7 @@ void signalHandler(int signum) {
 /**
  * @brief get sockaddr, IPv4 or IPv6
  */
-void *get_in_addr(struct sockaddr *sa)
+static void *get_in_addr(struct sockaddr *sa)
 {
     if (sa->sa_family == AF_INET) {
         return &(((struct sockaddr_in*)sa)->sin_addr);
@@ -100,24 +100,78 @@ void *get_in_addr(struct sockaddr *sa)
 /**
  * @brief write a message to syslog
  */
-void writeToSyslog(char* message) {
+static void writeToSyslog(char* message) {
 	openlog("aesdsocket", LOG_PID, LOG_USER);
 	syslog(LOG_INFO, "%s", message);  // Use format specifier
 	closelog();   
 }
 
+/**
+ * @brief display usage
+ */
+static void usage(const char *progName) {
+    fprintf(stderr, "Usage: %s [-d]\n", progName);
+    fprintf(stderr, "  -d  Run as daemon\n");
+    exit(EXIT_FAILURE);
+}
+
+/**
+ * @brief respawn as deamon
+ */
+#include <unistd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+static void daemonize() {
+    pid_t pid;
+
+    // (1) Fork and let the parent exit — detaches from the terminal
+    pid = fork();
+    if (pid < 0) exit(EXIT_FAILURE);
+    if (pid > 0) exit(EXIT_SUCCESS); // Parent exits
+
+    // (2) Create a new session — process becomes session leader, loses controlling terminal
+    if (setsid() < 0) exit(EXIT_FAILURE);
+
+    // (3) Fork again — prevents the daemon from ever reacquiring a terminal
+    pid = fork();
+    if (pid < 0) exit(EXIT_FAILURE);
+    if (pid > 0) exit(EXIT_SUCCESS); // First child exits
+
+    // (4) Set safe file permission mask
+    umask(0);
+
+    // (5) Change working directory to root to avoid blocking any mount point
+    if (chdir("/") < 0) exit(EXIT_FAILURE);
+
+    // (6) Redirect stdin, stdout, stderr to /dev/null
+    int devNull = open("/dev/null", O_RDWR);
+    if (devNull < 0) exit(EXIT_FAILURE);
+    dup2(devNull, STDIN_FILENO);
+    dup2(devNull, STDOUT_FILENO);
+    dup2(devNull, STDERR_FILENO);
+    if (devNull > STDERR_FILENO) close(devNull);
+}
 
 //--------------------------------------------------------------------------------------------------
 // main
 //--------------------------------------------------------------------------------------------------
-int main() {
-	
-	int new_fd; // TODO: we may need one per connection?
-	int sockfd;
-	struct addrinfo *servinfo;  // will point to the results
+int main(int argc, char *argv[]) {
 
-	// TODO: handle arguments
-	
+	// handle arguments
+    bool isDaemon = false;
+    if (argc == 1) {
+      isDaemon = false;
+    } else if (argc == 2 && strcmp(argv[1], "-d") == 0) {
+      isDaemon = true;
+    } else {
+      usage(argv[0]);
+    }
+
+    // run as deamon if so specified
+    if (isDaemon) {
+      daemonize();
+    }
+    	
 	// setup signal handlers for graceful shutdown
 	struct sigaction sa;
 	sa.sa_handler = signalHandler;
@@ -127,6 +181,9 @@ int main() {
 	sigaction(SIGTERM, &sa, NULL);
 	
 	// prepare socket communication
+	int new_fd; // TODO: we may need one per connection?
+	int sockfd;
+	struct addrinfo *servinfo;  // will point to the results
 	int status;
 	struct addrinfo hints;
 
