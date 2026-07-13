@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# aesdsocket-start-stop: Start/Stop script for aesdsocket daemon
+#
+
+DAEMON="/home/georg/Dev/Training/assignments-3-and-later-FreeSpirit9009/server/aesdsocket"
+NAME="aesdsocket"
+
+case "$1" in
+  start)
+    echo "Starting $NAME..."
+    # -S: Start
+    # -n: Match by name "aesdsocket"
+    # -x: Path to executable
+    # -- -d: Pass -d flag to the daemon so it forks
+    start-stop-daemon -S -n "$NAME" -x "$DAEMON" -- -d
+    ;;
+  stop)
+    echo "Stopping $NAME..."
+    # -K: Kill/Stop
+    # -n: Match by name "aesdsocket"
+    # -x: Ensure we only kill this specific executable
+    start-stop-daemon -K -n "$NAME" -x "$DAEMON"
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+    ;;
+esac
+
+exit 0
