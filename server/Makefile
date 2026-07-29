@@ -14,11 +14,11 @@ EXE     = aesdsocket
 all: $(EXE)
 
 $(EXE): $(OBJS)
-	gcc $(OBJS) -Wall -Wextra -Werror -o $(EXE)
+	$(CC) $(OBJS) -Wall -Wextra -Werror -o $(EXE)
 
 # Below is an inference rule, that is, a rule that generically applies to multiple targets/rules. See http://www-cip.physik.uni-bonn.de/pool/infos/make/advanced.html
 %.o: %.c
-	gcc -Wall -Wextra -Werror -g -c $*.c
+	$(CC) -Wall -Wextra -Werror -g -c $*.c
 
 clean:
 	rm -rf *.o
